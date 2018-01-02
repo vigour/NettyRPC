@@ -33,6 +33,15 @@ public class MessageRequest implements Serializable {
     private String methodName;
     private Class<?>[] typeParameters;
     private Object[] parametersVal;
+    private boolean invokeMetrics = true;
+
+    public boolean isInvokeMetrics() {
+        return invokeMetrics;
+    }
+
+    public void setInvokeMetrics(boolean invokeMetrics) {
+        this.invokeMetrics = invokeMetrics;
+    }
 
     public String getMessageId() {
         return messageId;
@@ -66,14 +75,15 @@ public class MessageRequest implements Serializable {
         this.typeParameters = typeParameters;
     }
 
-    public Object[] getParameters() {
+    public Object[] getParametersVal() {
         return parametersVal;
     }
 
-    public void setParameters(Object[] parametersVal) {
+    public void setParametersVal(Object[] parametersVal) {
         this.parametersVal = parametersVal;
     }
 
+    @Override
     public String toString() {
         return ReflectionToStringBuilder.toStringExclude(this, new String[]{"typeParameters", "parametersVal"});
     }

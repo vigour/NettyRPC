@@ -21,6 +21,7 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.common.util.concurrent.MoreExecutors;
 
+import com.newlandframework.rpc.jmx.ModuleMetricsHandler;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
@@ -71,7 +72,7 @@ public class MessageRecvExecutor implements ApplicationContextAware {
     private int echoApiPort;
     private RpcSerializeProtocol serializeProtocol = RpcSerializeProtocol.JDKSERIALIZE;
     private static final String DELIMITER = RpcSystemConfig.DELIMITER;
-    private int parallel = RpcSystemConfig.PARALLEL * 2;
+    private static final int PARALLEL = RpcSystemConfig.SYSTEM_PROPERTY_PARALLEL * 2;
     private static int threadNums = RpcSystemConfig.SYSTEM_PROPERTY_THREADPOOL_THREAD_NUMS;
     private static int queueNums = RpcSystemConfig.SYSTEM_PROPERTY_THREADPOOL_QUEUE_NUMS;
     private static volatile ListeningExecutorService threadPoolExecutor;
@@ -80,19 +81,19 @@ public class MessageRecvExecutor implements ApplicationContextAware {
 
     ThreadFactory threadRpcFactory = new NamedThreadFactory("NettyRPC ThreadFactory");
     EventLoopGroup boss = new NioEventLoopGroup();
-    EventLoopGroup worker = new NioEventLoopGroup(parallel, threadRpcFactory, SelectorProvider.provider());
+    EventLoopGroup worker = new NioEventLoopGroup(PARALLEL, threadRpcFactory, SelectorProvider.provider());
 
-    public MessageRecvExecutor() {
+    private MessageRecvExecutor() {
         handlerMap.clear();
         register();
     }
 
     private static class MessageRecvExecutorHolder {
-        static final MessageRecvExecutor instance = new MessageRecvExecutor();
+        static final MessageRecvExecutor INSTANCE = new MessageRecvExecutor();
     }
 
     public static MessageRecvExecutor getInstance() {
-        return MessageRecvExecutorHolder.instance;
+        return MessageRecvExecutorHolder.INSTANCE;
     }
 
     public static void submit(Callable<Boolean> task, final ChannelHandlerContext ctx, final MessageRequest request, final MessageResponse response) {
@@ -106,20 +107,24 @@ public class MessageRecvExecutor implements ApplicationContextAware {
 
         ListenableFuture<Boolean> listenableFuture = threadPoolExecutor.submit(task);
         Futures.addCallback(listenableFuture, new FutureCallback<Boolean>() {
+            @Override
             public void onSuccess(Boolean result) {
                 ctx.writeAndFlush(response).addListener(new ChannelFutureListener() {
+                    @Override
                     public void operationComplete(ChannelFuture channelFuture) throws Exception {
                         System.out.println("RPC Server Send message-id respone:" + request.getMessageId());
                     }
                 });
             }
 
+            @Override
             public void onFailure(Throwable t) {
                 t.printStackTrace();
             }
         }, threadPoolExecutor);
     }
 
+    @Override
     public void setApplicationContext(ApplicationContext ctx) throws BeansException {
         try {
             MessageKeyVal keyVal = (MessageKeyVal) ctx.getBean(Class.forName("com.newlandframework.rpc.model.MessageKeyVal"));
@@ -148,9 +153,9 @@ public class MessageRecvExecutor implements ApplicationContextAware {
 
             String[] ipAddr = serverAddress.split(MessageRecvExecutor.DELIMITER);
 
-            if (ipAddr.length == 2) {
-                String host = ipAddr[0];
-                int port = Integer.parseInt(ipAddr[1]);
+            if (ipAddr.length == RpcSystemConfig.IPADDR_OPRT_ARRAY_LENGTH) {
+                final String host = ipAddr[0];
+                final int port = Integer.parseInt(ipAddr[1]);
                 ChannelFuture future = null;
                 future = bootstrap.bind(host, port).sync();
 
@@ -158,10 +163,10 @@ public class MessageRecvExecutor implements ApplicationContextAware {
                     @Override
                     public void operationComplete(final ChannelFuture channelFuture) throws Exception {
                         if (channelFuture.isSuccess()) {
-                            ExecutorService executor = Executors.newFixedThreadPool(numberOfEchoThreadsPool);
+                            final ExecutorService executor = Executors.newFixedThreadPool(numberOfEchoThreadsPool);
                             ExecutorCompletionService<Boolean> completionService = new ExecutorCompletionService<Boolean>(executor);
                             completionService.submit(new ApiEchoResolver(host, echoApiPort));
-                            System.out.printf("[author tangjie] Netty RPC Server start success!\nip:%s\nport:%d\nprotocol:%s\n\n", host, port, serializeProtocol);
+                            System.out.printf("[author tangjie] Netty RPC Server start success!\nip:%s\nport:%d\nprotocol:%s\nstart-time:%s\njmx-invoke-metrics:%s\n\n", host, port, serializeProtocol, ModuleMetricsHandler.getStartTime(), (RpcSystemConfig.SYSTEM_PROPERTY_JMX_METRICS_SUPPORT ? "open" : "close"));
                             channelFuture.channel().closeFuture().sync().addListener(new ChannelFutureListener() {
                                 @Override
                                 public void operationComplete(ChannelFuture future) throws Exception {

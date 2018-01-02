@@ -16,7 +16,9 @@
 package com.newlandframework.rpc.core;
 
 import com.google.common.collect.ImmutableMap;
+import com.newlandframework.rpc.exception.CreateProxyException;
 
+import java.io.Serializable;
 import java.lang.reflect.GenericArrayType;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.ParameterizedType;
@@ -26,6 +28,10 @@ import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 /**
  * @author tangjie<https://github.com/tang-jie>
@@ -63,6 +69,85 @@ public class ReflectionUtils {
         builder.put(float.class, Float.valueOf(0));
         builder.put(int.class, Integer.valueOf(0));
         builder.put(long.class, Long.valueOf(0));
+    }
+
+    public static Class<?>[] filterInterfaces(Class<?>[] proxyClasses) {
+        Set<Class<?>> interfaces = new HashSet<Class<?>>();
+        for (Class<?> proxyClass : proxyClasses) {
+            if (proxyClass.isInterface()) {
+                interfaces.add(proxyClass);
+            }
+        }
+
+        interfaces.add(Serializable.class);
+        return interfaces.toArray(new Class[interfaces.size()]);
+    }
+
+    public static Class<?>[] filterNonInterfaces(Class<?>[] proxyClasses) {
+        Set<Class<?>> superclasses = new HashSet<Class<?>>();
+        for (Class<?> proxyClass : proxyClasses) {
+            if (!proxyClass.isInterface()) {
+                superclasses.add(proxyClass);
+            }
+        }
+
+        return superclasses.toArray(new Class[superclasses.size()]);
+    }
+
+    public static boolean existDefaultConstructor(Class<?> superclass) {
+        final Constructor<?>[] declaredConstructors = superclass.getDeclaredConstructors();
+        for (int i = 0; i < declaredConstructors.length; i++) {
+            Constructor<?> constructor = declaredConstructors[i];
+            boolean exist = (constructor.getParameterTypes().length == 0 &&
+                    (Modifier.isPublic(constructor.getModifiers()) || Modifier.isProtected(constructor.getModifiers())));
+            if (exist) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static Class<?> getParentClass(Class<?>[] proxyClasses) {
+        final Class<?>[] parent = filterNonInterfaces(proxyClasses);
+        switch (parent.length) {
+            case 0:
+                return Object.class;
+            case 1:
+                Class<?> superclass = parent[0];
+                if (Modifier.isFinal(superclass.getModifiers())) {
+                    throw new CreateProxyException(
+                            "proxy can't build " + superclass.getName() + " because it is final");
+                }
+                if (!existDefaultConstructor(superclass)) {
+                    throw new CreateProxyException(
+                            "proxy can't build " + superclass.getName() + ", because it has no default constructor");
+                }
+
+                return superclass;
+            default:
+                StringBuilder errorMessage = new StringBuilder("proxy class can't build");
+                for (int i = 0; i < parent.length; i++) {
+                    Class<?> c = parent[i];
+                    errorMessage.append(c.getName());
+                    if (i != parent.length - 1) {
+                        errorMessage.append(", ");
+                    }
+                }
+
+                errorMessage.append("; multiple implement not allowed");
+                throw new CreateProxyException(errorMessage.toString());
+        }
+    }
+
+    public static boolean isHashCodeMethod(Method method) {
+        return "hashCode".equals(method.getName()) && Integer.TYPE.equals(method.getReturnType())
+                && method.getParameterTypes().length == 0;
+    }
+
+    public static boolean isEqualsMethod(Method method) {
+        return "equals".equals(method.getName()) && Boolean.TYPE.equals(method.getReturnType())
+                && method.getParameterTypes().length == 1 && Object.class.equals(method.getParameterTypes()[0]);
     }
 
     public static Object newInstance(Class type) {
@@ -148,7 +233,7 @@ public class ReflectionUtils {
                 f.getName() + (html ? ";<br>" : ";\n"));
     }
 
-    private void listMethod(Executable member, boolean html) {
+    public void listMethod(Executable member, boolean html) {
         provider.append(html ? "<br>&nbsp&nbsp" : "\n  " + modifiers(member.getModifiers()));
         if (member instanceof Method) {
             provider.append(getType(((Method) member).getReturnType()) + " ");
@@ -188,6 +273,94 @@ public class ReflectionUtils {
             }
             provider.append(html ? "<br>}<p>" : "\n}\n\n");
         }
+    }
+
+    public static Method getDeclaredMethod(Class<?> cls, String methodName, Class<?>... parameterTypes) {
+        Method method = null;
+        Class<?> searchType = cls;
+        while (searchType != null) {
+            method = findDeclaredMethod(searchType, methodName, parameterTypes);
+            if (method != null) {
+                return method;
+            }
+            searchType = searchType.getSuperclass();
+        }
+        return method;
+    }
+
+    public static Method findDeclaredMethod(final Class<?> cls, final String methodName, final Class<?>... parameterTypes) {
+        Method method = null;
+        try {
+            method = cls.getDeclaredMethod(methodName, parameterTypes);
+            return method;
+        } catch (NoSuchMethodException e) {
+            if (method == null) {
+                for (Method m : cls.getDeclaredMethods()) {
+                    if (m.getName().equals(methodName)) {
+                        boolean find = true;
+                        Class[] paramType = m.getParameterTypes();
+                        if (paramType.length != parameterTypes.length) {
+                            continue;
+                        }
+                        for (int i = 0; i < parameterTypes.length; i++) {
+                            if (!paramType[i].isAssignableFrom(parameterTypes[i])) {
+                                find = false;
+                                break;
+                            }
+                        }
+                        if (find) {
+                            method = m;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        return method;
+    }
+
+    private String getClassType(Class<?>[] types) {
+        StringBuilder type = new StringBuilder();
+        for (int i = 0; i < types.length; i++) {
+            if (i > 0) {
+                type.append(", ");
+            }
+            type.append(getType(types[i]));
+        }
+        return type.toString();
+    }
+
+    public List<String> getClassMethodSignature(Class<?> cls) {
+        List<String> list = new ArrayList<String>();
+        if (cls.isInterface()) {
+            Method[] methods = cls.getDeclaredMethods();
+            StringBuilder signatureMethod = new StringBuilder();
+            for (Method member : methods) {
+                int modifiers = member.getModifiers();
+                if (Modifier.isAbstract(modifiers) && Modifier.isPublic(modifiers)) {
+                    signatureMethod.append(modifiers(Modifier.PUBLIC));
+                } else {
+                    signatureMethod.append(modifiers);
+                }
+
+                if (member instanceof Method) {
+                    signatureMethod.append(getType(((Method) member).getReturnType()) + " ");
+                }
+
+                signatureMethod.append(member.getName() + "(");
+                signatureMethod.append(getClassType(member.getParameterTypes()));
+                signatureMethod.append(")");
+                Class<?>[] exceptions = member.getExceptionTypes();
+                if (exceptions.length > 0) {
+                    signatureMethod.append(" throws ");
+                }
+                listTypes(exceptions);
+                signatureMethod.append(";");
+                list.add(signatureMethod.toString());
+                signatureMethod.delete(0, signatureMethod.length());
+            }
+        }
+        return list;
     }
 }
 

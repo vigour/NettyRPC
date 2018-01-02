@@ -16,6 +16,8 @@
 package com.newlandframework.rpc.spring;
 
 import com.newlandframework.rpc.core.RpcSystemConfig;
+import com.newlandframework.rpc.jmx.HashModuleMetricsVisitor;
+import com.newlandframework.rpc.jmx.ModuleMetricsHandler;
 import com.newlandframework.rpc.jmx.ThreadPoolMonitorProvider;
 import com.newlandframework.rpc.serialize.RpcSerializeProtocol;
 import com.newlandframework.rpc.netty.MessageRecvExecutor;
@@ -36,10 +38,17 @@ public class NettyRpcRegistery implements InitializingBean, DisposableBean {
     private String echoApiPort;
     private AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext();
 
+    @Override
     public void destroy() throws Exception {
         MessageRecvExecutor.getInstance().stop();
+
+        if (RpcSystemConfig.SYSTEM_PROPERTY_JMX_METRICS_SUPPORT) {
+            ModuleMetricsHandler handler = ModuleMetricsHandler.getInstance();
+            handler.stop();
+        }
     }
 
+    @Override
     public void afterPropertiesSet() throws Exception {
         MessageRecvExecutor ref = MessageRecvExecutor.getInstance();
         ref.setServerAddress(ipAddr);
@@ -52,6 +61,13 @@ public class NettyRpcRegistery implements InitializingBean, DisposableBean {
         }
 
         ref.start();
+
+        if (RpcSystemConfig.SYSTEM_PROPERTY_JMX_METRICS_SUPPORT) {
+            HashModuleMetricsVisitor visitor = HashModuleMetricsVisitor.getInstance();
+            visitor.signal();
+            ModuleMetricsHandler handler = ModuleMetricsHandler.getInstance();
+            handler.start();
+        }
     }
 
     public String getIpAddr() {
